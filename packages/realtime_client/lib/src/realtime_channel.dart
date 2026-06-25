@@ -151,6 +151,26 @@ class RealtimeChannel {
         if (callback != null) callback(RealtimeSubscribeStatus.closed, null);
       });
 
+      // DLCT patch (SSK gap #184): the postgres_changes replication
+      // subscription is established ASYNCHRONOUSLY, AFTER the phoenix join.
+      // When it fails (e.g. RLS denies under a stale/expired token, or the
+      // server declines under load), the server emits a `system` event with
+      // status 'error' AFTER the join already reported `subscribed`. Upstream
+      // swallows it, leaving a channel that is `subscribed` yet delivers zero
+      // rows forever -- the zombie class. Surface it as channelError so
+      // consumers mark the channel failed and recover.
+      onSystemEvents((payload) {
+        if (payload is Map && payload['status'] == 'error') {
+          if (callback != null) {
+            callback(
+              RealtimeSubscribeStatus.channelError,
+              Exception(payload['message']?.toString() ??
+                  'postgres_changes subscription failed'),
+            );
+          }
+        }
+      });
+
       final presenceEnabled = _shouldEnablePresence();
 
       final accessTokenPayload = <String, String>{};
